@@ -262,7 +262,7 @@ if __name__ == "__main__":
             HIT_Single.G = Gs[i,j]
             Is[i,j] = I_Single_String(HIT_Single,ReturnNegative=True)
 
-    plt.figure()
+    plt.figure(figsize=(8,8))
     plt.plot(Vs, Is[:,0], '-', color='darkorange', label=r'$1000\ W/m^2$', linewidth=2)
     plt.plot(Vs, Is[:,1], '-', color='darkorange', label=r'$800\ W/m^2$', linewidth=1)
     plt.plot(Vs, Is[:,2], '-', color='darkorange', label=r'$600\ W/m^2$', linewidth=1)
@@ -294,14 +294,17 @@ if __name__ == "__main__":
 
     xtix = np.arange(int(time[0]),int(time[-1]+1),2)
     xtixnames = []
+    xtixblank = []
     for i in range(0,len(xtix)):
         xtixnames.append(PrintTime(xtix[i],minute=False))
+        xtixblank.append('')
 
     plt.figure(figsize=(10,16/3))
     plt.subplot(2,1,1)
     plt.plot(time,Ts-273.15,color='darkorange')
     plt.ylabel('Temperature (°C)')
     plt.xlim([time[0],time[-1]])
+    plt.xticks(xtix,xtixblank)
 
     plt.subplot(2,1,2)
     plt.plot(time,Gs,color='darkorange')
@@ -315,11 +318,13 @@ if __name__ == "__main__":
     plt.plot(time,Ps,color='darkorange')
     plt.ylabel('Power (W)')
     plt.xlim([time[0],time[-1]])
+    plt.xticks(xtix,xtixblank)
 
     plt.subplot(3,1,2)
     plt.plot(time,Is,color='darkorange')
     plt.ylabel('Current (A)')
     plt.xlim([time[0],time[-1]])
+    plt.xticks(xtix,xtixblank)
 
     plt.subplot(3,1,3)
     plt.plot(time,Vs,color='darkorange')
