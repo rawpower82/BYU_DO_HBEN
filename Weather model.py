@@ -24,6 +24,9 @@ TempF = data['Temperature  [2 m above gnd]'] #use this as the solar panel temper
 TempC = (TempF - 32) * 5/9
 Radiation = data['Shortwave Radiation  [sfc]']
 
+interp1d(know,want to know)
+interp_func = interp1d(xdata,ydata)
+interp_func()
 
 #%%
 #Plot
