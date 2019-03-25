@@ -28,17 +28,17 @@ Radiation = data['Shortwave Radiation  [sfc]']
 #%%
 #Plot
 
-# for day 7 of month 3 (March 7, 2019) (Provo, UT)
+# for day 16 of month 3 (March 16, 2019) (Provo, UT)
 plt.subplot(3,1,1)
-plt.plot(hour[0:23],TempF[0:23],'r-')
+plt.plot(hour[216:239],TempF[216:239],'r-')
 plt.legend(['Temperature (F)'],loc='best')
 plt.subplot(3,1,2)
-plt.plot(hour[0:23],TempC[0:23],'b-')
+plt.plot(hour[216:239],TempC[216:239],'b-')
 plt.legend(['Temperature (C)'],loc='best')
 plt.subplot(3,1,3)
-plt.plot(hour[0:23],Radiation[0:23],'y--')
+plt.plot(hour[216:239],Radiation[216:239],'y--')
 plt.xlabel('Time (hours)')
-plt.legend(['Radiation (W/m^2)'],loc='best')
+plt.legend(['Solar Irradiation (W/m^2)'],loc='best')
 plt.show()
 
 # for the entire 2 weeks (March 7 - 21st, 2019) (Provo, UT)
