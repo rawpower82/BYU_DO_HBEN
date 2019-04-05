@@ -6,9 +6,11 @@ Created on Sat Jun 10 12:52:21 2017
 """
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import fsolve,brent
 from ApproximateSolarModelParameters import ApproximateModelParameters
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
 
 def Series_vs_Parallel_Modules(area,voltage,Nm_s_guess=8,Nm_p_guess=4,V_oc_single=1.1,cells_per_module=96,
                              cell_width=0.125,cell_diagonal=0.160,module_width=41.5*0.0254,module_length=62.6*0.0254):
@@ -262,7 +264,7 @@ if __name__ == "__main__":
             HIT_Single.G = Gs[i,j]
             Is[i,j] = I_Single_String(HIT_Single,ReturnNegative=True)
 
-    plt.figure(figsize=(8,8))
+    plt.figure(figsize=(7,6))
     plt.plot(Vs, Is[:,0], '-', color='darkorange', label=r'$1000\ W/m^2$', linewidth=2)
     plt.plot(Vs, Is[:,1], '-', color='darkorange', label=r'$800\ W/m^2$', linewidth=1)
     plt.plot(Vs, Is[:,2], '-', color='darkorange', label=r'$600\ W/m^2$', linewidth=1)
@@ -270,6 +272,7 @@ if __name__ == "__main__":
     plt.plot(Vs, Is[:,4], '-', color='darkorange', label=r'$200\ W/m^2$', linewidth=1)
     plt.ylim(0,7.0)
     plt.yticks(np.linspace(0,7,8))
+    plt.gca().yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
     plt.xlim(0,80)
     plt.xticks(np.linspace(0,80,9))
     plt.ylabel('Current (A)')
@@ -278,10 +281,15 @@ if __name__ == "__main__":
     plt.grid()
 
     #%% Change in Irradiance
-    time = np.linspace(7,17,n)
-    Ts = -70*((time-12)/12)**2 + 305
-    Gs = -8000*((time-12)/12)**2 + 1200
-    Gs[Gs < 0] = 0.0
+    df = pd.read_csv('history_export_2019-03-21T21_33_39.csv')
+    time = df['Hour'][216:239].values
+    Ts = (df['Temperature  [2 m above gnd]'][216:239].values-32)*5/9+273.15 # K
+    Gs = df['Shortwave Radiation  [sfc]'][216:239].values # W/m2
+    n = len(time)
+    #time = np.linspace(7,17,n)
+    #Ts = -70*((time-12)/12)**2 + 305
+    #Gs = -8000*((time-12)/12)**2 + 1200
+    #Gs[Gs < 0] = 0.0
     Ps = np.empty(n)
     Is = np.empty(n)
     Vs = np.empty(n)
@@ -299,17 +307,23 @@ if __name__ == "__main__":
         xtixnames.append(PrintTime(xtix[i],minute=False))
         xtixblank.append('')
 
-    plt.figure(figsize=(10,16/3))
-    plt.subplot(2,1,1)
+    plt.figure(figsize=(10,8))
+    plt.subplot(3,1,1)
     plt.plot(time,Ts-273.15,color='darkorange')
     plt.ylabel('Temperature (°C)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixblank)
 
-    plt.subplot(2,1,2)
+    plt.subplot(3,1,2)
     plt.plot(time,Gs,color='darkorange')
-    plt.xlabel('Time (hr)')
     plt.ylabel('Solar Irradiance (W/m^2)')
+    plt.xlim([time[0],time[-1]])
+    plt.xticks(xtix,xtixblank)
+
+    plt.subplot(3,1,3)
+    plt.plot(time,etas*100,color='darkorange')
+    plt.xlabel('Time (hr)')
+    plt.ylabel('Solar Efficiency (%)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixnames)
 
