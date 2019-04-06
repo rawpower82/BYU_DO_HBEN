@@ -10,6 +10,7 @@ import pandas as pd
 from scipy.optimize import fsolve,brent
 from ApproximateSolarModelParameters import ApproximateModelParameters
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.ticker import FormatStrFormatter
 
 def Series_vs_Parallel_Modules(area,voltage,Nm_s_guess=8,Nm_p_guess=4,V_oc_single=1.1,cells_per_module=96,
@@ -228,6 +229,74 @@ def SolarPowerMPP(parameters_group):
     # solar_section_efficiencies - (array, unitless) [efficiencies of each solar section]
     '''
 
+def OrientationCorrection(DirectFlux,Azimuth,Zenith,RoofDirection,RoofPitch=26.6,ViewPlot=False):
+        '''
+        DirectFlux    [float,W/m^2]   (Direct tracking flux)
+        Azimuth       [float,degrees] (Sun's azimuth angle clockwise from north)
+        Zenith        [float,degrees] (Sun's zenith angle; 0 = up, 90 = horizon)
+        RoofDirection [float,degrees] (Roof spine angle clockwise from north)
+                                      ( = 0 for N-S; = 90 for E-W)
+        RoofPitch     [float,degrees] (Roof pitch angle)
+        '''
+        A = np.radians(-Azimuth + 90) # Convert azimuth angle to standard math
+        # coordinates (x-axis = 0 , positive counter-clockwise)
+        Z = np.radians(Zenith)
+
+        # Convert sun angles to vector
+        u = np.cos(A)*np.sin(Z) # east
+        v = np.sin(A)*np.sin(Z) # north
+        w = np.cos(Z) # up
+        sun_norm = np.sqrt(u**2+v**2+w**2)
+
+        # Calculate surface normal
+        c1_l = np.cos(np.radians(RoofPitch))    # Roof pitch
+        c1_r = np.cos(-np.radians(RoofPitch))     # Roof pitch
+        #c2 = np.cos(0.0)                         # Spine is parallel to ground
+        c3 = np.cos(np.radians(RoofDirection))   # Spine angle clockwise from north
+        s1_l = np.sin(np.radians(RoofPitch))    # Roof pitch
+        s1_r = np.sin(-np.radians(RoofPitch))     # Roof pitch
+        #s2 = np.sin(0.0)                         # Spine is parallel to ground
+        s3 = np.sin(np.radians(RoofDirection))   # Spine angle clockwise from north
+
+        n1_l = -c3*s1_l #c1*s2*s3 - c3*s1 # east - s2 = 0
+        n1_r = -c3*s1_r #c1*s2*s3 - c3*s1 # east - s2 = 0
+        n2_l = s1_l*s3 #c1*c3*s2 + s1*s3 # north - s2 = 0
+        n2_r = s1_r*s3 #c1*c3*s2 + s1*s3 # north - s2 = 0
+        n3_l = c1_l #c1*c2 # up - c2 = 1
+        n3_r = c1_r #c1*c2 # up - c2 = 1
+        norm = np.sqrt(n1_l**2+n2_l**2+n3_l**2)
+
+        # Obliquity factor (0-1)
+        mu_l = u/sun_norm*n1_l/norm + v/sun_norm*n2_l/norm + w/sun_norm*n3_l/norm
+        mu_r = u/sun_norm*n1_r/norm + v/sun_norm*n2_r/norm + w/sun_norm*n3_r/norm
+
+        # Clip mu to >= 0, (goes negative if module is facing away from sun)
+        if(mu_l < 0):
+            mu_l = 0
+        if(mu_r < 0):
+            mu_r = 0
+
+        # Local flux for each side
+        LocalFluxL = mu_l * DirectFlux # (W/m^2)
+        LocalFluxR = mu_r * DirectFlux # (W/m^2)
+
+        if ViewPlot:
+            fig = plt.figure()
+            ax = Axes3D(fig)
+            plt.quiver(np.array([0]),np.array([0]),np.array([0]),[u/sun_norm],[v/sun_norm],[w/sun_norm],normalize=False,color='red')
+            plt.quiver(np.array([0]),np.array([0]),np.array([0]),[n1_l/norm],[n2_l/norm],[n3_l/norm],normalize=False,color='grey')
+            plt.quiver(np.array([0]),np.array([0]),np.array([0]),[n1_r/norm],[n2_r/norm],[n3_r/norm],normalize=False,color='black')
+            plt.plot([0],[0],[0],'ko')
+            plt.plot([u/sun_norm],[v/sun_norm],[w/sun_norm],'ro')
+            ax.set_xlim([-1,1])
+            ax.set_ylim([-1,1])
+            ax.set_zlim([0,1])
+            ax.set_xlabel('e')
+            ax.set_ylabel('n')
+            ax.set_zlabel('u')
+
+        return LocalFluxL,LocalFluxR,mu_l,mu_r
+
 def PrintTime(Hour,minute=True,second=False):
     if 12 <= Hour < 24:
         am_pm = 'PM'
@@ -307,25 +376,25 @@ if __name__ == "__main__":
         xtixnames.append(PrintTime(xtix[i],minute=False))
         xtixblank.append('')
 
-    plt.figure(figsize=(10,8))
-    plt.subplot(3,1,1)
+    plt.figure(figsize=(10,16/3))
+    plt.subplot(2,1,1)
     plt.plot(time,Ts-273.15,color='darkorange')
     plt.ylabel('Temperature (°C)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixblank)
 
-    plt.subplot(3,1,2)
+    plt.subplot(2,1,2)
     plt.plot(time,Gs,color='darkorange')
     plt.ylabel('Solar Irradiance (W/m^2)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixblank)
 
-    plt.subplot(3,1,3)
-    plt.plot(time,etas*100,color='darkorange')
-    plt.xlabel('Time (hr)')
-    plt.ylabel('Solar Efficiency (%)')
-    plt.xlim([time[0],time[-1]])
-    plt.xticks(xtix,xtixnames)
+    #plt.subplot(3,1,3)
+    #plt.plot(time,etas*100,color='darkorange')
+    #plt.xlabel('Time (hr)')
+    #plt.ylabel('Solar Efficiency (%)')
+    #plt.xlim([time[0],time[-1]])
+    #plt.xticks(xtix,xtixnames)
 
     plt.figure(figsize=(10,8))
     plt.subplot(3,1,1)
@@ -346,3 +415,12 @@ if __name__ == "__main__":
     plt.ylabel('Voltage (V)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixnames)
+
+    #%%
+    DirectFlux = 1000 # W/m2
+    Azimuth = 60
+    Zenith = 15
+    RoofDirection = 0 # N-S; 90 for E-W
+    RoofPitch = 26.6
+    LocalFluxL,LocalFluxR,mu_l,mu_r = OrientationCorrection(DirectFlux,Azimuth,Zenith,
+                                                            RoofDirection,RoofPitch,ViewPlot=True)
