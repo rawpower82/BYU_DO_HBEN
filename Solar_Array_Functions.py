@@ -350,15 +350,67 @@ if __name__ == "__main__":
     plt.grid()
 
     #%% Change in Irradiance
-    df = pd.read_csv('history_export_2019-03-21T21_33_39.csv')
-    time = df['Hour'][216:239].values
-    Ts = (df['Temperature  [2 m above gnd]'][216:239].values-32)*5/9+273.15 # K
-    Gs = df['Shortwave Radiation  [sfc]'][216:239].values # W/m2
+    RoofDirection = 0 # N-S; 90 for E-W
+    RoofPitch = 26.6
+    df = pd.read_csv('SolarExport2019-04-06T18_03_26.csv')
+    time = df['Hour'][192:216].values
+    Ts = df['Temperature (K)'][192:216].values # K
+    DirectFluxes = df['Direct Flux (W/m2)'][192:216].values # W/m2
+    ClearDirectFluxes = df['Clear Direct Flux (W/m2)'][192:216].values # W/m2
+    Zeniths = df['Zenith (deg from up)'][192:216].values # degrees
+    Azimuths =df['Azimuth (deg from north cw)'][192:216].values # degrees
     n = len(time)
-    #time = np.linspace(7,17,n)
-    #Ts = -70*((time-12)/12)**2 + 305
-    #Gs = -8000*((time-12)/12)**2 + 1200
-    #Gs[Gs < 0] = 0.0
+
+    LocalFluxL = np.empty(n)
+    LocalFluxR = np.empty(n)
+    mu_l = np.empty(n)
+    mu_r = np.empty(n)
+
+    for i in range(n):
+        LocalFluxL[i],LocalFluxR[i],mu_l[i],mu_r[i] = OrientationCorrection(DirectFluxes[i],Azimuths[i],Zeniths[i],
+                                                            RoofDirection,RoofPitch,ViewPlot=False)
+
+    xtix = np.arange(int(time[0]),int(time[-1]+1),2)
+    xtixnames = []
+    xtixblank = []
+    for i in range(0,len(xtix)):
+        xtixnames.append(PrintTime(xtix[i],minute=False))
+        xtixblank.append('')
+
+    plt.figure(figsize=(10,16/3))
+    plt.subplot(2,1,1)
+    plt.plot(time,np.ones(n)*90,'k--')
+    plt.plot(time,np.ones(n)*270,'k--')
+    plt.plot(time,Zeniths,'-',color='darkorange',label='Zenith')
+    plt.plot(time,Azimuths,'--',color='darkorange',label='Azimuth')
+    plt.ylabel('Angles (°)')
+    #plt.gca().set_yticks([90,270],minor=True)
+    #plt.gca().set_yticklabels([90,270],minor=True)
+    plt.xlim([time[0],time[-1]])
+    plt.xticks(xtix,xtixblank)
+    plt.legend()
+
+    plt.subplot(2,1,2)
+    plt.plot(time,ClearDirectFluxes,'-',color='darkorange',label='Clear Direct')
+    plt.plot(time,DirectFluxes,'--',color='darkorange',label='Direct')
+    if int(RoofDirection) == 0:
+        label_L = 'Roof (West Facing)'
+        label_R = 'Roof (East Facing)'
+    elif int(RoofDirection) == 90:
+        label_L = 'Roof (North Facing)'
+        label_R = 'Roof (South Facing)'
+    else:
+        label_L = 'Roof (Left)'
+        label_R = 'Roof (Right)'
+    plt.plot(time,LocalFluxL,'-.',color='darkorange',label=label_L)
+    plt.plot(time,LocalFluxR,':',color='darkorange',label=label_R)
+    plt.ylabel('Solar Irradiance (W/m^2)')
+    plt.xlim([time[0],time[-1]])
+    plt.xticks(xtix,xtixnames)
+    plt.legend()
+    plt.xlabel('Time (hr)')
+
+    Gs = LocalFluxL
     Ps = np.empty(n)
     Is = np.empty(n)
     Vs = np.empty(n)
@@ -368,13 +420,6 @@ if __name__ == "__main__":
         HIT_Single.T = Ts[i]
         results = SolarPowerMPP([HIT_Single])
         Ps[i],Is[i],Vs[i],etas[i],null = results
-
-    xtix = np.arange(int(time[0]),int(time[-1]+1),2)
-    xtixnames = []
-    xtixblank = []
-    for i in range(0,len(xtix)):
-        xtixnames.append(PrintTime(xtix[i],minute=False))
-        xtixblank.append('')
 
     plt.figure(figsize=(10,16/3))
     plt.subplot(2,1,1)
@@ -387,7 +432,8 @@ if __name__ == "__main__":
     plt.plot(time,Gs,color='darkorange')
     plt.ylabel('Solar Irradiance (W/m^2)')
     plt.xlim([time[0],time[-1]])
-    plt.xticks(xtix,xtixblank)
+    plt.xticks(xtix,xtixnames)
+    plt.xlabel('Time (hr)')
 
     #plt.subplot(3,1,3)
     #plt.plot(time,etas*100,color='darkorange')
@@ -415,12 +461,3 @@ if __name__ == "__main__":
     plt.ylabel('Voltage (V)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixnames)
-
-    #%%
-    DirectFlux = 1000 # W/m2
-    Azimuth = 60
-    Zenith = 15
-    RoofDirection = 0 # N-S; 90 for E-W
-    RoofPitch = 26.6
-    LocalFluxL,LocalFluxR,mu_l,mu_r = OrientationCorrection(DirectFlux,Azimuth,Zenith,
-                                                            RoofDirection,RoofPitch,ViewPlot=True)
