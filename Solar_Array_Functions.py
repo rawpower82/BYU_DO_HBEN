@@ -6,9 +6,12 @@ Created on Sat Jun 10 12:52:21 2017
 """
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import fsolve,brent
 from ApproximateSolarModelParameters import ApproximateModelParameters
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.ticker import FormatStrFormatter
 
 def Series_vs_Parallel_Modules(area,voltage,Nm_s_guess=8,Nm_p_guess=4,V_oc_single=1.1,cells_per_module=96,
                              cell_width=0.125,cell_diagonal=0.160,module_width=41.5*0.0254,module_length=62.6*0.0254):
@@ -226,6 +229,74 @@ def SolarPowerMPP(parameters_group):
     # solar_section_efficiencies - (array, unitless) [efficiencies of each solar section]
     '''
 
+def OrientationCorrection(DirectFlux,Azimuth,Zenith,RoofDirection,RoofPitch=26.6,ViewPlot=False):
+        '''
+        DirectFlux    [float,W/m^2]   (Direct tracking flux)
+        Azimuth       [float,degrees] (Sun's azimuth angle clockwise from north)
+        Zenith        [float,degrees] (Sun's zenith angle; 0 = up, 90 = horizon)
+        RoofDirection [float,degrees] (Roof spine angle clockwise from north)
+                                      ( = 0 for N-S; = 90 for E-W)
+        RoofPitch     [float,degrees] (Roof pitch angle)
+        '''
+        A = np.radians(-Azimuth + 90) # Convert azimuth angle to standard math
+        # coordinates (x-axis = 0 , positive counter-clockwise)
+        Z = np.radians(Zenith)
+
+        # Convert sun angles to vector
+        u = np.cos(A)*np.sin(Z) # east
+        v = np.sin(A)*np.sin(Z) # north
+        w = np.cos(Z) # up
+        sun_norm = np.sqrt(u**2+v**2+w**2)
+
+        # Calculate surface normal
+        c1_l = np.cos(np.radians(RoofPitch))    # Roof pitch
+        c1_r = np.cos(-np.radians(RoofPitch))     # Roof pitch
+        #c2 = np.cos(0.0)                         # Spine is parallel to ground
+        c3 = np.cos(np.radians(RoofDirection))   # Spine angle clockwise from north
+        s1_l = np.sin(np.radians(RoofPitch))    # Roof pitch
+        s1_r = np.sin(-np.radians(RoofPitch))     # Roof pitch
+        #s2 = np.sin(0.0)                         # Spine is parallel to ground
+        s3 = np.sin(np.radians(RoofDirection))   # Spine angle clockwise from north
+
+        n1_l = -c3*s1_l #c1*s2*s3 - c3*s1 # east - s2 = 0
+        n1_r = -c3*s1_r #c1*s2*s3 - c3*s1 # east - s2 = 0
+        n2_l = s1_l*s3 #c1*c3*s2 + s1*s3 # north - s2 = 0
+        n2_r = s1_r*s3 #c1*c3*s2 + s1*s3 # north - s2 = 0
+        n3_l = c1_l #c1*c2 # up - c2 = 1
+        n3_r = c1_r #c1*c2 # up - c2 = 1
+        norm = np.sqrt(n1_l**2+n2_l**2+n3_l**2)
+
+        # Obliquity factor (0-1)
+        mu_l = u/sun_norm*n1_l/norm + v/sun_norm*n2_l/norm + w/sun_norm*n3_l/norm
+        mu_r = u/sun_norm*n1_r/norm + v/sun_norm*n2_r/norm + w/sun_norm*n3_r/norm
+
+        # Clip mu to >= 0, (goes negative if module is facing away from sun)
+        if(mu_l < 0):
+            mu_l = 0
+        if(mu_r < 0):
+            mu_r = 0
+
+        # Local flux for each side
+        LocalFluxL = mu_l * DirectFlux # (W/m^2)
+        LocalFluxR = mu_r * DirectFlux # (W/m^2)
+
+        if ViewPlot:
+            fig = plt.figure()
+            ax = Axes3D(fig)
+            plt.quiver(np.array([0]),np.array([0]),np.array([0]),[u/sun_norm],[v/sun_norm],[w/sun_norm],normalize=False,color='red')
+            plt.quiver(np.array([0]),np.array([0]),np.array([0]),[n1_l/norm],[n2_l/norm],[n3_l/norm],normalize=False,color='grey')
+            plt.quiver(np.array([0]),np.array([0]),np.array([0]),[n1_r/norm],[n2_r/norm],[n3_r/norm],normalize=False,color='black')
+            plt.plot([0],[0],[0],'ko')
+            plt.plot([u/sun_norm],[v/sun_norm],[w/sun_norm],'ro')
+            ax.set_xlim([-1,1])
+            ax.set_ylim([-1,1])
+            ax.set_zlim([0,1])
+            ax.set_xlabel('e')
+            ax.set_ylabel('n')
+            ax.set_zlabel('u')
+
+        return LocalFluxL,LocalFluxR,mu_l,mu_r
+
 def PrintTime(Hour,minute=True,second=False):
     if 12 <= Hour < 24:
         am_pm = 'PM'
@@ -248,7 +319,7 @@ if __name__ == "__main__":
     HIT_Single = Parameter(Area_Desired=1.7,Voltage_Desired=70)
     plt.close('all')
     #%% Current vs. Voltage
-    n = 100
+    n = 500
     Vs = np.linspace(0,80,n)
     Ts = np.ones(n)*298.15 # (K) [cell temperature]
     Gs = np.empty(((n,5)))
@@ -262,7 +333,7 @@ if __name__ == "__main__":
             HIT_Single.G = Gs[i,j]
             Is[i,j] = I_Single_String(HIT_Single,ReturnNegative=True)
 
-    plt.figure(figsize=(8,8))
+    plt.figure(figsize=(7,6))
     plt.plot(Vs, Is[:,0], '-', color='darkorange', label=r'$1000\ W/m^2$', linewidth=2)
     plt.plot(Vs, Is[:,1], '-', color='darkorange', label=r'$800\ W/m^2$', linewidth=1)
     plt.plot(Vs, Is[:,2], '-', color='darkorange', label=r'$600\ W/m^2$', linewidth=1)
@@ -270,6 +341,7 @@ if __name__ == "__main__":
     plt.plot(Vs, Is[:,4], '-', color='darkorange', label=r'$200\ W/m^2$', linewidth=1)
     plt.ylim(0,7.0)
     plt.yticks(np.linspace(0,7,8))
+    plt.gca().yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
     plt.xlim(0,80)
     plt.xticks(np.linspace(0,80,9))
     plt.ylabel('Current (A)')
@@ -277,20 +349,81 @@ if __name__ == "__main__":
     plt.legend(loc=1,prop={'size':9.5})
     plt.grid()
 
-    #%% Change in Irradiance
-    time = np.linspace(7,17,n)
-    Ts = -70*((time-12)/12)**2 + 305
-    Gs = -8000*((time-12)/12)**2 + 1200
-    Gs[Gs < 0] = 0.0
-    Ps = np.empty(n)
-    Is = np.empty(n)
-    Vs = np.empty(n)
-    etas = np.empty(n)
+    #%% Sensitivity Analysis
+    Ts = np.linspace(-25,65,n) + 273.15  # (K)
+    Gs = np.linspace(0,1200,n)      # (W/m^2)
+    T = 25+273.15 # K
+    G = 800 # W/m2
+    Ps = np.empty((n,2))
+    etas = np.empty((n,2))
+
+    # Constant Irradiance
+    HIT_Single.G = G
     for i in range(n):
-        HIT_Single.G = Gs[i]
         HIT_Single.T = Ts[i]
         results = SolarPowerMPP([HIT_Single])
-        Ps[i],Is[i],Vs[i],etas[i],null = results
+        Ps[i,0] = results[0]
+        etas[i,0] = results[3]
+
+    # Constant Temperature
+    HIT_Single.T = T
+    for i in range(n):
+        HIT_Single.G = Gs[i]
+        results = SolarPowerMPP([HIT_Single])
+        Ps[i,1] = results[0]
+        etas[i,1] = results[3]
+
+
+    plt.figure(figsize=(10,8))
+    plt.subplot(2,1,1)
+    plt.plot(Ts-273.15,Ps[:,0],color='darkorange',label='Irradiance = 800 W/m$^2$')
+    plt.xlabel('Temperature (°C)')
+    plt.ylabel('Module Power (W)')
+    plt.xlim([Ts[0]-273.15,Ts[-1]-273.15])
+    plt.legend()
+
+    plt.subplot(2,1,2)
+    plt.plot(Gs,Ps[:,1],color='darkorange',label='Temperature = 25°C')
+    plt.ylabel('Module Power (W)')
+    plt.xlim([Gs[0],Gs[-1]])
+    plt.xlabel('Solar Irradiance (W/m$^2$)')
+    plt.legend()
+
+    plt.figure(figsize=(10,8))
+    plt.subplot(2,1,1)
+    plt.plot(Ts-273.15,etas[:,0]*100,color='darkorange',label='Irradiance = 800 W/m$^2$')
+    plt.xlabel('Temperature (°C)')
+    plt.ylabel('Module Efficiency (%)')
+    plt.xlim([Ts[0]-273.15,Ts[-1]-273.15])
+    plt.legend()
+
+    plt.subplot(2,1,2)
+    plt.plot(Gs,etas[:,1]*100,color='darkorange',label='Temperature = 25°C')
+    plt.ylabel('Module Efficiency (%)')
+    plt.xlim([Gs[0],Gs[-1]])
+    plt.xlabel('Solar Irradiance (W/m$^2$)')
+    plt.legend()
+
+    #%% Simulation with data
+    RoofDirection = 0 # N-S; 90 for E-W
+    RoofPitch = 26.6
+    df = pd.read_csv('SolarExport2019-04-06T18_03_26.csv')
+    time = df['Hour'][192:216].values
+    Temperatures = df['Temperature (K)'][192:216].values # K
+    DirectFluxes = df['Direct Flux (W/m2)'][192:216].values # W/m2
+    ClearDirectFluxes = df['Clear Direct Flux (W/m2)'][192:216].values # W/m2
+    Zeniths = df['Zenith (deg from up)'][192:216].values # degrees
+    Azimuths =df['Azimuth (deg from north cw)'][192:216].values # degrees
+    n = len(time)
+
+    LocalFluxL = np.empty(n)
+    LocalFluxR = np.empty(n)
+    mu_l = np.empty(n)
+    mu_r = np.empty(n)
+
+    for i in range(n):
+        LocalFluxL[i],LocalFluxR[i],mu_l[i],mu_r[i] = OrientationCorrection(DirectFluxes[i],Azimuths[i],Zeniths[i],
+                                                            RoofDirection,RoofPitch,ViewPlot=False)
 
     xtix = np.arange(int(time[0]),int(time[-1]+1),2)
     xtixnames = []
@@ -301,17 +434,68 @@ if __name__ == "__main__":
 
     plt.figure(figsize=(10,16/3))
     plt.subplot(2,1,1)
-    plt.plot(time,Ts-273.15,color='darkorange')
+    plt.plot(time,np.ones(n)*90,'k--')
+    plt.plot(time,np.ones(n)*270,'k--')
+    plt.plot(time,Zeniths,'-',color='darkorange',label='Zenith')
+    plt.plot(time,Azimuths,'--',color='darkorange',label='Azimuth')
+    plt.ylabel('Angles (°)')
+    #plt.gca().set_yticks([90,270],minor=True)
+    #plt.gca().set_yticklabels([90,270],minor=True)
+    plt.xlim([time[0],time[-1]])
+    plt.xticks(xtix,xtixblank)
+    plt.legend()
+
+    plt.subplot(2,1,2)
+    plt.plot(time,ClearDirectFluxes,'-',color='darkorange',label='Clear Direct')
+    plt.plot(time,DirectFluxes,'--',color='darkorange',label='Direct')
+    if int(RoofDirection) == 0:
+        label_L = 'Roof (West Facing)'
+        label_R = 'Roof (East Facing)'
+    elif int(RoofDirection) == 90:
+        label_L = 'Roof (North Facing)'
+        label_R = 'Roof (South Facing)'
+    else:
+        label_L = 'Roof (Left)'
+        label_R = 'Roof (Right)'
+    plt.plot(time,LocalFluxL,'-.',color='darkorange',label=label_L)
+    plt.plot(time,LocalFluxR,':',color='darkorange',label=label_R)
+    plt.ylabel('Solar Irradiance (W/m^2)')
+    plt.xlim([time[0],time[-1]])
+    plt.xticks(xtix,xtixnames)
+    plt.legend()
+    plt.xlabel('Time (hr)')
+
+    Gs = LocalFluxL
+    Ps = np.empty(n)
+    Is = np.empty(n)
+    Vs = np.empty(n)
+    etas = np.empty(n)
+    for i in range(n):
+        HIT_Single.G = Gs[i]
+        HIT_Single.T = Temperatures[i]
+        results = SolarPowerMPP([HIT_Single])
+        Ps[i],Is[i],Vs[i],etas[i],null = results
+
+    plt.figure(figsize=(10,16/3))
+    plt.subplot(2,1,1)
+    plt.plot(time,Temperatures-273.15,color='darkorange')
     plt.ylabel('Temperature (°C)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixblank)
 
     plt.subplot(2,1,2)
     plt.plot(time,Gs,color='darkorange')
-    plt.xlabel('Time (hr)')
     plt.ylabel('Solar Irradiance (W/m^2)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixnames)
+    plt.xlabel('Time (hr)')
+
+    #plt.subplot(3,1,3)
+    #plt.plot(time,etas*100,color='darkorange')
+    #plt.xlabel('Time (hr)')
+    #plt.ylabel('Solar Efficiency (%)')
+    #plt.xlim([time[0],time[-1]])
+    #plt.xticks(xtix,xtixnames)
 
     plt.figure(figsize=(10,8))
     plt.subplot(3,1,1)
@@ -332,3 +516,12 @@ if __name__ == "__main__":
     plt.ylabel('Voltage (V)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixnames)
+    #%% Sizing the Array
+    A_roof_side = 750*0.092903 # (m^2) [area of each side of the roof]
+    V_array_des = 560 # (V) [target voltage of entire solar array]
+    HIT_l = Parameter(Area_Desired=A_roof_side,Voltage_Desired=V_array_des,Print=False)
+    HIT_r = Parameter(Area_Desired=A_roof_side,Voltage_Desired=V_array_des,Print=False)
+    print (HIT_l.Nm_s)
+    print (HIT_l.N_p)
+    print (HIT_l.SolarPanelArea)
+    print (HIT_l.SolarCellArea)
