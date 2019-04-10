@@ -8,6 +8,7 @@ Created on Tue Apr  9 10:04:58 2019
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import interp1d
 from gekko import GEKKO
 from Solar_Array_Functions import Parameter, SolarPowerMPP, OrientationCorrection
 import matplotlib.pyplot as plt
@@ -53,28 +54,55 @@ Q1=13.5    # [kWh] storage capacity
 D2=30.0e3 # [W] max continuous discharge rate
 C2=60.0e3 # [W] max continuous charge rate
 Q2=87.0   # [kWh] storage capacity  (77)
-Q2_J=Q2*3600.0e3 # (J) [storage capacity]
+Q2_J=Q2*3600e3 # (J) [storage capacity]
 ########################################################################
 
+#%%
+# Optimize entire control horizon at once? # Will doing less this prevent solver from knowing when to buy/sell?
+# Import data
+indices = [0,-1]#[0,-1]#[192,216]
+df = pd.read_csv('SolarExport2019-04-06T18_03_26.csv')
+time = df['Time (hr)'][indices[0]:indices[1]].values-df['Time (hr)'][indices[0]] # (hr)
+hours = df['Hour'][indices[0]:indices[1]].values # (hr)
+Temperatures = df['Temperature (K)'][indices[0]:indices[1]].values # (K)
+DirectFluxes = df['Direct Flux (W/m2)'][indices[0]:indices[1]].values # (W/m2)
+ClearDirectFluxes = df['Clear Direct Flux (W/m2)'][indices[0]:indices[1]].values # (W/m2)
+Zeniths = df['Zenith (deg from up)'][indices[0]:indices[1]].values # (degrees)
+Azimuths =df['Azimuth (deg from north cw)'][indices[0]:indices[1]].values # (degrees)
+n = len(time)
+p_low = 0.07 # ($/kWh)
+p_high = 0.23 # ($/kWh)
+time24 = np.linspace(0,23,24)
+prices24 = np.ones(24)*p_low*3600e3 # ($/J)
+prices24[7:11] = p_high*3600e3 # ($/J)
+prices24[13:22] = p_high*3600e3 # ($/J)
+prices = interp1d(time24,prices24)(hours) # ($/J)
+
+# Orientation correction of solar irradiance
+LocalFluxL = np.empty(n)
+LocalFluxR = np.empty(n)
+for i in range(n):
+    LocalFluxL[i],LocalFluxR[i],null1,null2 = OrientationCorrection(DirectFluxes[i],Azimuths[i],Zeniths[i],
+                                                        RoofDirection,RoofPitch,ViewPlot=False)
 #%% Build Model
 m = GEKKO()
+m.time = time
 
 # Parameters
 # T/Gsol will be functions of weather forecast
-Tsol_l = m.Param(value=25+273.15) # (K) [solar cell temperature - left side]
-Tsol_r = m.Param(value=25+273.15) # (K) [solar cell temperature - right side]
-Gsol_l = m.Param(value=800) # (W/m2) [orientation corrected solar irradiation - left side]
-Gsol_r = m.Param(value=800) # (W/m2) [orientation corrected solar irradiation - right side]
+Tsol_l = m.Param(value=Temperatures) # (K) [solar cell temperature - left side]
+Tsol_r = m.Param(value=Temperatures) # (K) [solar cell temperature - right side]
+Gsol_l = m.Param(value=LocalFluxL) # (W/m2) [orientation corrected solar irradiation - left side]
+Gsol_r = m.Param(value=LocalFluxR) # (W/m2) [orientation corrected solar irradiation - right side]
 Pdemand = m.Param(value=30e3) # (W) [electricity demand of the house]
-# ($/J) [electricity prices]
-
+# import data, adjust each day with random noise
+price = m.Param(value=prices) # ($/J) [electricity price]
 
 # Manipulated Variables
 # May need to specify Nm_p so voltage is specified
 # Need to place limit on number of panels (within roof area, voltage limits)
 # May need to do economic analysis of solar panels separately due to integer solver being slow
 # Should we also manipulate the number of Powerwall batteries?
-# Need to update bounds on battery rates
 # Need to model use of Tesla during the day (unavailable, SOC drops)
     # Given duty with random variation for Tesla each day? Random deviations from departure and arrival times?
 Nm_s_l = m.FV(value=8,lb=1,integer=True) # [number of solar modules in series - left side]
@@ -82,17 +110,15 @@ Nm_s_r = m.FV(value=8,lb=1,integer=True) # [number of solar modules in series - 
 Nm_p_l = m.FV(value=5,lb=1,integer=True) # [number of solar modules in parallel - left side]
 Nm_p_r = m.FV(value=5,lb=1,integer=True) # [number of solar modules in parallel - right side]
 NN_PW = m.FV(value=1,lb=1,integer=True)  # [number of powerwall batteries]
-B_rate1 = m.MV(value=-15e3) # (W) [rate of charge(+)/discharge(-) of Powerwall batteries]
-B_rate2 = m.MV(value=-15e3) # (W) [rate of charge(+)/discharge(-) of Tesla ModelS battery]
+B_rate1 = m.MV(value=-5e3,lb=-D1*NN_PW,ub=C1*NN_PW) # (W) [rate of charge(+)/discharge(-) of Powerwall batteries]
+B_rate2 = m.MV(value=-25e3,lb=-D2,ub=C2) # (W) [rate of charge(+)/discharge(-) of Tesla ModelS battery]
 B_rate1.STATUS = 1
 B_rate2.STATUS = 1
 
 # State variables
-SOC1 = m.SV(value=0.8,lb=0,ub=1) # [state of charge of Powerwall batteries]
-SOC2 = m.SV(value=0.8,lb=0,ub=1) # [state of charge of Tesla ModelS battery]
-
-# Controlled Variables
-# Do we have any? We aren't really following a set point. Should we have objective functions instead?
+SOC1 = m.SV(value=0.02,lb=0,ub=1) # [state of charge of Powerwall batteries]
+SOC2 = m.SV(value=0.02,lb=0,ub=1) # [state of charge of Tesla ModelS battery]
+#cost = m.SV(value=0.00) # ($) [total spent(+)/earned(-) from buying/selling electricity from/to the grid at given time point]
 
 # Intermediates
 # Is it possible to reject Psol when Vsol is too low? Maybe make inverter efficiency = f(V)?
@@ -102,30 +128,21 @@ Vsol_l = m.Intermediate(aV*(bV**Tsol_l)*(Gsol_l**cV)*Nm_s_l) # (V) [solar array 
 Vsol_r = m.Intermediate(aV*(bV**Tsol_r)*(Gsol_r**cV)*Nm_s_r) # (V) [solar array voltage - right side]
 Psol_tot = m.Intermediate((Psol_l + Psol_r)*inverter_eff) # (W) [Power from solar array]
 Q1_J = m.Intermediate(Q1*NN_PW*3600.0e3) # (J) [storage capacity]
-discharge1_max = m.Intermediate(-D1*(dis1[3]/(1+(dis1[1]/(SOC1-dis1[0]))**dis1[2]))) # (W) [maximum discharge rate of Powerwall batteries]
-charge1_max = m.Intermediate(C1*(1/(char1[0]+((SOC1-char1[1])/char1[2])**char1[3]))) # (W) [maximum charge rate of Powerwall batteries]
-discharge2_max = m.Intermediate(-D2*(dis1[3]/(1+(dis1[1]/(SOC2-dis1[0]))**dis1[2]))) # (W) [maximum discharge rate of Tesla ModelS battery]
-charge2_max = m.Intermediate(C2*(1/(char1[0]+((SOC2-char1[1])/char1[2])**char1[3]))) # (W) [maximum charge rate of Tesla ModelS battery]
 Pbatt = m.Intermediate(-B_rate1-B_rate2) # (W) [Net power flow from(+)/to(-) the batteries]
 Pgrid = m.Intermediate(Pdemand-Psol_tot-Pbatt) # (W) [Power bought(+)/sold(-) to the grid]
-#cost = m.Intermediate() # ($) [cost(+)/revenue(-) from buying/selling electricity from/to the grid]
-
-# Have entire control horizon use one bound? # Will this prevent solver from knowing when to buy/sell?
-#B_rate1.LOWER = discharge1_max
-#B_rate2.LOWER = discharge2_max
-#B_rate1.UPPER = charge1_max
-#B_rate2.UPPER = charge2_max
+cost_rate = m.Intermediate(price*Pgrid*3600) # ($/hr) [cost(+)/revenue(-) from buying/selling electricity from/to the grid]
 
 # Equations
-#m.Equation(discharge1_max <= B_rate1)
-#m.Equation(B_rate1 <= charge1_max)
-#m.Equation(discharge2_max <= B_rate2)
-#m.Equation(B_rate2 <= charge2_max)
 m.Equation(SOC1.dt() == B_rate1/Q1_J)
 m.Equation(SOC2.dt() == B_rate2/Q2_J)
+#m.Equation(cost.dt() == cost_rate)
 
 # Objectives
-m.Obj(Pgrid)
+p = np.zeros(n)
+p[-1] = 1.0
+final = m.Param(value=p)
+#m.Obj(cost*final)
+m.Obj(cost_rate)
 # if multiple objectives are provided, they are summed
 # m.fix() # Charge Tesla by morning
 # Max profit / Min bill
@@ -137,42 +154,28 @@ m.options.NODES = 3
 m.options.MV_TYPE = 0
 #m.options.CV_TYPE = 1 # 1 - ranked objectives; 2 - compromise
 
-#%%
-# Import data
-indices = [192,216]#[0,-1]
-df = pd.read_csv('SolarExport2019-04-06T18_03_26.csv')
-time = df['Time (hr)'][indices[0]:indices[1]].values-df['Time (hr)'][indices[0]]
-Temperatures = df['Temperature (K)'][indices[0]:indices[1]].values # K
-DirectFluxes = df['Direct Flux (W/m2)'][indices[0]:indices[1]].values # W/m2
-ClearDirectFluxes = df['Clear Direct Flux (W/m2)'][indices[0]:indices[1]].values # W/m2
-Zeniths = df['Zenith (deg from up)'][indices[0]:indices[1]].values # degrees
-Azimuths =df['Azimuth (deg from north cw)'][indices[0]:indices[1]].values # degrees
-n = len(time)
-m.time = time
-Tsol_l.value = Temperatures
-Tsol_r.value = Temperatures
-
-# Orientation correction of solar irradiance
-LocalFluxL = np.empty(n)
-LocalFluxR = np.empty(n)
-for i in range(n):
-    LocalFluxL[i],LocalFluxR[i],null1,null2 = OrientationCorrection(DirectFluxes[i],Azimuths[i],Zeniths[i],
-                                                        RoofDirection,RoofPitch,ViewPlot=False)
-Gsol_l.value = LocalFluxL
-Gsol_r.value = LocalFluxR
-
 # Solve
+m.solver_options = ['max_iter 100']
 m.solve()#disp=False)
 
+
+
+
 #%%
 plt.figure()
-plt.plot(m.time,SOC1.value)
-plt.plot(m.time,SOC2.value)
+plt.plot(m.time,np.array(SOC1.value)*100,label='Powerwall')
+plt.plot(m.time,np.array(SOC2.value)*100,label='ModelS')
+plt.legend()
+plt.ylabel('SOC (%)')
 
 plt.figure()
-plt.plot(m.time,np.array(-Pdemand.value)*1e-3,label='Demand')
-plt.plot(m.time,np.array(Psol_tot.value)*1e-3,'-.',label='Solar')
-plt.plot(m.time,np.array(Pbatt.value)*1e-3,'--',label='Battery')
-plt.plot(m.time,np.array(Pgrid.value)*1e-3,':',label='Grid')
+plt.plot(m.time[:-1],np.array(-Pdemand.value)[:-1]*1e-3,label='Demand')
+plt.plot(m.time[:-1],np.array(Psol_tot.value)[:-1]*1e-3,'-.',label='Solar')
+plt.plot(m.time[:-1],np.array(Pbatt.value)[:-1]*1e-3,'--',label='Battery')
+plt.plot(m.time[:-1],np.array(Pgrid.value)[:-1]*1e-3,':',label='Grid')
 plt.ylabel('Power (kW)')
 plt.legend()
+
+plt.figure()
+plt.plot(m.time,np.array(cost.value))
+plt.ylabel('Cost ($)')
