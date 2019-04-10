@@ -12,8 +12,8 @@ from datetime import datetime, timezone, timedelta
 import matplotlib.pyplot as plt
 
 # Provo, Utah
-latitude = 40.2338
-longitude = -111.6585
+latitude = 40.23
+longitude = -111.66
 
 data_filename = 'history_export_2019-04-06T18_03_26.csv' # temperature in C, post DST
 #'history_export_2019-03-21T21_33_39.csv' # temperature in F, pre and post DST

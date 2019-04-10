@@ -319,7 +319,7 @@ if __name__ == "__main__":
     HIT_Single = Parameter(Area_Desired=1.7,Voltage_Desired=70)
     plt.close('all')
     #%% Current vs. Voltage
-    n = 100
+    n = 500
     Vs = np.linspace(0,80,n)
     Ts = np.ones(n)*298.15 # (K) [cell temperature]
     Gs = np.empty(((n,5)))
@@ -349,12 +349,67 @@ if __name__ == "__main__":
     plt.legend(loc=1,prop={'size':9.5})
     plt.grid()
 
-    #%% Change in Irradiance
+    #%% Sensitivity Analysis
+    Ts = np.linspace(-25,65,n) + 273.15  # (K)
+    Gs = np.linspace(0,1200,n)      # (W/m^2)
+    T = 25+273.15 # K
+    G = 800 # W/m2
+    Ps = np.empty((n,2))
+    etas = np.empty((n,2))
+
+    # Constant Irradiance
+    HIT_Single.G = G
+    for i in range(n):
+        HIT_Single.T = Ts[i]
+        results = SolarPowerMPP([HIT_Single])
+        Ps[i,0] = results[0]
+        etas[i,0] = results[3]
+
+    # Constant Temperature
+    HIT_Single.T = T
+    for i in range(n):
+        HIT_Single.G = Gs[i]
+        results = SolarPowerMPP([HIT_Single])
+        Ps[i,1] = results[0]
+        etas[i,1] = results[3]
+
+
+    plt.figure(figsize=(10,8))
+    plt.subplot(2,1,1)
+    plt.plot(Ts-273.15,Ps[:,0],color='darkorange',label='Irradiance = 800 W/m$^2$')
+    plt.xlabel('Temperature (°C)')
+    plt.ylabel('Module Power (W)')
+    plt.xlim([Ts[0]-273.15,Ts[-1]-273.15])
+    plt.legend()
+
+    plt.subplot(2,1,2)
+    plt.plot(Gs,Ps[:,1],color='darkorange',label='Temperature = 25°C')
+    plt.ylabel('Module Power (W)')
+    plt.xlim([Gs[0],Gs[-1]])
+    plt.xlabel('Solar Irradiance (W/m$^2$)')
+    plt.legend()
+
+    plt.figure(figsize=(10,8))
+    plt.subplot(2,1,1)
+    plt.plot(Ts-273.15,etas[:,0]*100,color='darkorange',label='Irradiance = 800 W/m$^2$')
+    plt.xlabel('Temperature (°C)')
+    plt.ylabel('Module Efficiency (%)')
+    plt.xlim([Ts[0]-273.15,Ts[-1]-273.15])
+    plt.legend()
+
+    plt.subplot(2,1,2)
+    plt.plot(Gs,etas[:,1]*100,color='darkorange',label='Temperature = 25°C')
+    plt.ylabel('Module Efficiency (%)')
+    plt.xlim([Gs[0],Gs[-1]])
+    plt.xlabel('Solar Irradiance (W/m$^2$)')
+    plt.legend()
+
+    #%% Simulation with data
     RoofDirection = 0 # N-S; 90 for E-W
     RoofPitch = 26.6
     df = pd.read_csv('SolarExport2019-04-06T18_03_26.csv')
     time = df['Hour'][192:216].values
-    Ts = df['Temperature (K)'][192:216].values # K
+    Temperatures = df['Temperature (K)'][192:216].values # K
     DirectFluxes = df['Direct Flux (W/m2)'][192:216].values # W/m2
     ClearDirectFluxes = df['Clear Direct Flux (W/m2)'][192:216].values # W/m2
     Zeniths = df['Zenith (deg from up)'][192:216].values # degrees
@@ -417,13 +472,13 @@ if __name__ == "__main__":
     etas = np.empty(n)
     for i in range(n):
         HIT_Single.G = Gs[i]
-        HIT_Single.T = Ts[i]
+        HIT_Single.T = Temperatures[i]
         results = SolarPowerMPP([HIT_Single])
         Ps[i],Is[i],Vs[i],etas[i],null = results
 
     plt.figure(figsize=(10,16/3))
     plt.subplot(2,1,1)
-    plt.plot(time,Ts-273.15,color='darkorange')
+    plt.plot(time,Temperatures-273.15,color='darkorange')
     plt.ylabel('Temperature (°C)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixblank)
@@ -461,3 +516,12 @@ if __name__ == "__main__":
     plt.ylabel('Voltage (V)')
     plt.xlim([time[0],time[-1]])
     plt.xticks(xtix,xtixnames)
+    #%% Sizing the Array
+    A_roof_side = 750*0.092903 # (m^2) [area of each side of the roof]
+    V_array_des = 560 # (V) [target voltage of entire solar array]
+    HIT_l = Parameter(Area_Desired=A_roof_side,Voltage_Desired=V_array_des,Print=False)
+    HIT_r = Parameter(Area_Desired=A_roof_side,Voltage_Desired=V_array_des,Print=False)
+    print (HIT_l.Nm_s)
+    print (HIT_l.N_p)
+    print (HIT_l.SolarPanelArea)
+    print (HIT_l.SolarCellArea)
