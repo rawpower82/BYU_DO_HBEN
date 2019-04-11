@@ -43,6 +43,7 @@ RoofA_r = 750*m2_ft2 # (m^2) [area of roof - right side]
 # Charging and Discharging Parameters
 dis1=[-1.00e-29, 9.12e-03, 1.593965, 1.0] # Fractional discharging rate
 char1=[1.0, 1.0+1e-30, -9.11e-03, -1.593965303] # Fractional charging rate
+batt_eff = np.sqrt(0.915) # [one-way efficiency of battery (square to get round trip)]
 
 # Tesla Powerwall Battery
 D1=5.0e3   # [W] max continuous discharge rate
@@ -59,8 +60,9 @@ Q2_J=Q2*3600e3 # (J) [storage capacity]
 
 #%%
 # Optimize entire control horizon at once? # Will doing less this prevent solver from knowing when to buy/sell?
+# 24 hour timeframe may be sufficient? May be necessary due to large computation demand
 # Import data
-indices = [0,-1]#[0,-1]#[192,216]
+indices = [192,216]#[0,-1]#[192,216]
 df = pd.read_csv('SolarExport2019-04-06T18_03_26.csv')
 time = df['Time (hr)'][indices[0]:indices[1]].values-df['Time (hr)'][indices[0]] # (hr)
 hours = df['Hour'][indices[0]:indices[1]].values # (hr)
@@ -73,10 +75,14 @@ n = len(time)
 p_low = 0.07 # ($/kWh)
 p_high = 0.23 # ($/kWh)
 time24 = np.linspace(0,23,24)
-prices24 = np.ones(24)*p_low*3600e3 # ($/J)
-prices24[7:11] = p_high*3600e3 # ($/J)
-prices24[13:22] = p_high*3600e3 # ($/J)
+prices24 = np.ones(24)*p_low/3600e3 # ($/J)
+prices24[7:11] = p_high/3600e3 # ($/J)
+prices24[13:22] = p_high/3600e3 # ($/J)
 prices = interp1d(time24,prices24)(hours) # ($/J)
+demand24 = np.array([28,26.7,26.3,26.4,26.9,28,29.3,30,30.9,31.8,32.7,31,30.1,29.2,27.6,27.3,27.9,29.1,33.3,35.5,35.2,33,32.3,30.2]) # (kW)
+demand24 = demand24*30/sum(demand24)
+# These prices were too steep. It should be 30 kWh per day, not 30 kW average
+demand = interp1d(time24,demand24)(hours)*1e3 # (W)
 
 # Orientation correction of solar irradiance
 LocalFluxL = np.empty(n)
@@ -94,8 +100,8 @@ Tsol_l = m.Param(value=Temperatures) # (K) [solar cell temperature - left side]
 Tsol_r = m.Param(value=Temperatures) # (K) [solar cell temperature - right side]
 Gsol_l = m.Param(value=LocalFluxL) # (W/m2) [orientation corrected solar irradiation - left side]
 Gsol_r = m.Param(value=LocalFluxR) # (W/m2) [orientation corrected solar irradiation - right side]
-Pdemand = m.Param(value=30e3) # (W) [electricity demand of the house]
-# import data, adjust each day with random noise
+Pdemand = m.Param(value=demand) # (W) [electricity demand of the house]
+# adjust each day with random noise?
 price = m.Param(value=prices) # ($/J) [electricity price]
 
 # Manipulated Variables
@@ -110,63 +116,101 @@ Nm_s_r = m.FV(value=8,lb=1,integer=True) # [number of solar modules in series - 
 Nm_p_l = m.FV(value=5,lb=1,integer=True) # [number of solar modules in parallel - left side]
 Nm_p_r = m.FV(value=5,lb=1,integer=True) # [number of solar modules in parallel - right side]
 NN_PW = m.FV(value=1,lb=1,integer=True)  # [number of powerwall batteries]
-B_rate1 = m.MV(value=-5e3,lb=-D1*NN_PW,ub=C1*NN_PW) # (W) [rate of charge(+)/discharge(-) of Powerwall batteries]
-B_rate2 = m.MV(value=-25e3,lb=-D2,ub=C2) # (W) [rate of charge(+)/discharge(-) of Tesla ModelS battery]
-B_rate1.STATUS = 1
-B_rate2.STATUS = 1
-
-# State variables
-SOC1 = m.SV(value=0.02,lb=0,ub=1) # [state of charge of Powerwall batteries]
-SOC2 = m.SV(value=0.02,lb=0,ub=1) # [state of charge of Tesla ModelS battery]
-#cost = m.SV(value=0.00) # ($) [total spent(+)/earned(-) from buying/selling electricity from/to the grid at given time point]
+########################################################################
+# This method does not account for battery efficiency, but is much faster
+#B_rate1 = m.MV(value=-5e3,lb=-D1*NN_PW,ub=C1*NN_PW) # (W) [rate of charge(+)/discharge(-) of Powerwall batteries]
+#B_rate2 = m.MV(value=-25e3,lb=-D2,ub=C2) # (W) [rate of charge(+)/discharge(-) of Tesla ModelS battery]
+#B_rate1.STATUS = 1
+#B_rate2.STATUS = 1
+########################################################################
+# This method is quite expensive computationally
+B_charge1 = m.MV(value=0,lb=0,ub=C1*NN_PW) # (W) [rate of charge of Powerwall batteries]
+B_charge2 = m.MV(value=0,lb=0,ub=C2) # (W) [rate of charge of Tesla ModelS battery]
+B_discharge1 = m.MV(value=5e3,lb=0,ub=D1*NN_PW) # (W) [rate of discharge of Powerwall batteries]
+B_discharge2 = m.MV(value=25e3,lb=0,ub=D2) # (W) [rate of discharge of Tesla ModelS battery]
+B_charge1.STATUS = 1
+B_charge2.STATUS = 1
+B_discharge1.STATUS = 1
+B_discharge2.STATUS = 1
+########################################################################
 
 # Intermediates
 # Is it possible to reject Psol when Vsol is too low? Maybe make inverter efficiency = f(V)?
+# Battery efficiency is not implemented
 Psol_l = m.Intermediate(aP*(bP**Tsol_l)*(Gsol_l**cP)*Nm_p_l*Nm_s_l) # [solar array power - left side]
 Psol_r = m.Intermediate(aP*(bP**Tsol_r)*(Gsol_r**cP)*Nm_p_r*Nm_s_r) # [solar array power - right side]
 Vsol_l = m.Intermediate(aV*(bV**Tsol_l)*(Gsol_l**cV)*Nm_s_l) # (V) [solar array voltage - left side]
 Vsol_r = m.Intermediate(aV*(bV**Tsol_r)*(Gsol_r**cV)*Nm_s_r) # (V) [solar array voltage - right side]
 Psol_tot = m.Intermediate((Psol_l + Psol_r)*inverter_eff) # (W) [Power from solar array]
 Q1_J = m.Intermediate(Q1*NN_PW*3600.0e3) # (J) [storage capacity]
-Pbatt = m.Intermediate(-B_rate1-B_rate2) # (W) [Net power flow from(+)/to(-) the batteries]
+########################################################################
+# This method does not account for battery efficiency, but is much faster
+#Pbatt = m.Intermediate(-B_rate1-B_rate2) # (W) [Net power flow from(+)/to(-) the batteries]
+########################################################################
+# This method is quite expensive computationally
+Pbatt = m.Intermediate(B_discharge1+B_discharge2-B_charge1-B_charge2) # (W) [Net power flow from(+)/to(-) the batteries]
+########################################################################
 Pgrid = m.Intermediate(Pdemand-Psol_tot-Pbatt) # (W) [Power bought(+)/sold(-) to the grid]
 cost_rate = m.Intermediate(price*Pgrid*3600) # ($/hr) [cost(+)/revenue(-) from buying/selling electricity from/to the grid]
 
+# State variables
+SOC1_init = 0.50
+SOC2_init = 0.70
+SOC1 = m.SV(value=SOC1_init,lb=0,ub=1) # [state of charge of Powerwall batteries]
+SOC2 = m.SV(value=SOC2_init,lb=0,ub=1) # [state of charge of Tesla ModelS battery]
+cost = m.SV(value=0.00) # ($) [total spent(+)/earned(-) from buying/selling electricity from/to the grid at given time point]
+
 # Equations
-m.Equation(SOC1.dt() == B_rate1/Q1_J)
-m.Equation(SOC2.dt() == B_rate2/Q2_J)
-#m.Equation(cost.dt() == cost_rate)
+########################################################################
+# This method does not account for battery efficiency, but is much faster
+#m.Equation(SOC1.dt() == B_rate1*3600/Q1_J)#*batt_eff) # multiplying works for charging, but not discharging
+#m.Equation(SOC2.dt() == B_rate2*3600/Q2_J)#*batt_eff)
+########################################################################
+# This method is quite expensive computationally
+m.Equation(SOC1.dt() == (B_charge1*batt_eff-B_discharge1*(2-batt_eff))*3600/Q1_J)
+m.Equation(SOC2.dt() == (B_charge2*batt_eff-B_discharge2*(2-batt_eff))*3600/Q2_J)
+m.Equation(B_charge1*B_discharge1 == 0) # Only one of the two variables can be nonzero
+m.Equation(B_charge2*B_discharge2 == 0) # Only one of the two variables can be nonzero
+########################################################################
+m.Equation(cost.dt() == cost_rate)
 
 # Objectives
 p = np.zeros(n)
 p[-1] = 1.0
 final = m.Param(value=p)
-#m.Obj(cost*final)
-m.Obj(cost_rate)
+m.Obj(cost*final)
+#m.Obj(cost_rate)
 # if multiple objectives are provided, they are summed
-# m.fix() # Charge Tesla by morning
+q = np.zeros(n)
+q[np.where(hours==5)] = 1.0
+morning_charge = m.Param(value=q)
+m.Obj(-SOC2*morning_charge*1000000000)
+m.Obj((SOC1-SOC1_init)**2)
+m.Obj((SOC2-SOC2_init)**2)
+#m.fix(SOC2,5,1.0) # Charge Tesla by morning
+#m.fix(SOC1,23,SOC1_init)
+#m.fix(SOC2,23,SOC2_init)
 # Max profit / Min bill
 
 # Options
 m.options.IMODE = 6
-m.options.SOLVER = 3 # IPOPT
+m.options.SOLVER = 3
 m.options.NODES = 3
 m.options.MV_TYPE = 0
-#m.options.CV_TYPE = 1 # 1 - ranked objectives; 2 - compromise
 
 # Solve
-m.solver_options = ['max_iter 100']
+m.solver_options = ['max_iter 125000']
 m.solve()#disp=False)
-
 
 
 
 #%%
 plt.figure()
-plt.plot(m.time,np.array(SOC1.value)*100,label='Powerwall')
-plt.plot(m.time,np.array(SOC2.value)*100,label='ModelS')
-plt.legend()
+plt.plot(m.time,np.array(SOC1.value)*100,'-',label='Powerwall')
+plt.plot(m.time,np.array(SOC2.value)*100,'--',label='ModelS')
 plt.ylabel('SOC (%)')
+plt.legend()
+plt.grid()
 
 plt.figure()
 plt.plot(m.time[:-1],np.array(-Pdemand.value)[:-1]*1e-3,label='Demand')
@@ -175,7 +219,18 @@ plt.plot(m.time[:-1],np.array(Pbatt.value)[:-1]*1e-3,'--',label='Battery')
 plt.plot(m.time[:-1],np.array(Pgrid.value)[:-1]*1e-3,':',label='Grid')
 plt.ylabel('Power (kW)')
 plt.legend()
+plt.grid()
 
 plt.figure()
 plt.plot(m.time,np.array(cost.value))
 plt.ylabel('Cost ($)')
+plt.grid()
+
+plt.figure()
+plt.plot(m.time[:-1],np.array(B_charge1.value)[:-1]*1e-3,'-',label='Charge 1')
+plt.plot(m.time[:-1],np.array(B_charge2.value)[:-1]*1e-3,'--',label='Charge 2')
+plt.plot(m.time[:-1],np.array(B_discharge1.value)[:-1]*1e-3,'-',label='Discharge 1')
+plt.plot(m.time[:-1],np.array(B_discharge2.value)[:-1]*1e-3,'--',label='Discharge 2')
+plt.ylabel('Power (kW)')
+plt.legend()
+plt.grid()
