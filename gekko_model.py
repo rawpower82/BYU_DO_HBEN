@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 from gekko import GEKKO
-from Solar_Array_Functions import Parameter, SolarPowerMPP, OrientationCorrection
+from Solar_Array_Functions import Parameter, SolarPowerMPP, OrientationCorrection, PrintTime
 import matplotlib.pyplot as plt
 plt.close('all')
 
@@ -72,8 +72,8 @@ ClearDirectFluxes = df['Clear Direct Flux (W/m2)'][indices[0]:indices[1]].values
 Zeniths = df['Zenith (deg from up)'][indices[0]:indices[1]].values # (degrees)
 Azimuths =df['Azimuth (deg from north cw)'][indices[0]:indices[1]].values # (degrees)
 n = len(time)
-p_low = 0.07 # ($/kWh)
-p_high = 0.23 # ($/kWh)
+p_low = 0.0679 # ($/kWh)
+p_high = 0.2278 # ($/kWh)
 time24 = np.linspace(0,23,24)
 prices24 = np.ones(24)*p_low/3600e3 # ($/J)
 prices24[7:11] = p_high/3600e3 # ($/J)
@@ -93,9 +93,14 @@ for i in range(n):
 #%% Build Model
 m = GEKKO()
 m.time = time
+m.hours = hours
+#nm = len(time)*2 # 30 minute intervals
+#m.time = np.linspace(time[0],time[-1],nm)
+#m.hours = interp1d(time,hours)(m.time)
 
 # Parameters
 # T/Gsol will be functions of weather forecast
+########################################################################
 Tsol_l = m.Param(value=Temperatures) # (K) [solar cell temperature - left side]
 Tsol_r = m.Param(value=Temperatures) # (K) [solar cell temperature - right side]
 Gsol_l = m.Param(value=LocalFluxL) # (W/m2) [orientation corrected solar irradiation - left side]
@@ -103,6 +108,15 @@ Gsol_r = m.Param(value=LocalFluxR) # (W/m2) [orientation corrected solar irradia
 Pdemand = m.Param(value=demand) # (W) [electricity demand of the house]
 # adjust each day with random noise?
 price = m.Param(value=prices) # ($/J) [electricity price]
+########################################################################
+#Tsol_l = m.Param(value=interp1d(time,Temperatures)(m.time)) # (K) [solar cell temperature - left side]
+#Tsol_r = m.Param(value=interp1d(time,Temperatures)(m.time)) # (K) [solar cell temperature - right side]
+#Gsol_l = m.Param(value=interp1d(time,LocalFluxL)(m.time)) # (W/m2) [orientation corrected solar irradiation - left side]
+#Gsol_r = m.Param(value=interp1d(time,LocalFluxR)(m.time)) # (W/m2) [orientation corrected solar irradiation - right side]
+#Pdemand = m.Param(value=interp1d(time,demand)(m.time)) # (W) [electricity demand of the house]
+## adjust each day with random noise?
+#price = m.Param(value=interp1d(time,prices)(m.time)) # ($/J) [electricity price]
+########################################################################
 
 # Manipulated Variables
 # May need to specify Nm_p so voltage is specified
@@ -176,17 +190,19 @@ m.Equation(cost.dt() == cost_rate)
 
 # Objectives
 p = np.zeros(n)
+#p = np.zeros(nm)
 p[-1] = 1.0
 final = m.Param(value=p)
 m.Obj(cost*final)
 #m.Obj(cost_rate)
 # if multiple objectives are provided, they are summed
 q = np.zeros(n)
-q[np.where(hours==5)] = 1.0
+#q = np.zeros(nm)
+q[np.where(m.hours==5)] = 1.0
 morning_charge = m.Param(value=q)
-m.Obj(-SOC2*morning_charge*1000000000)
-m.Obj((SOC1-SOC1_init)**2)
-m.Obj((SOC2-SOC2_init)**2)
+#m.Obj(-SOC2*morning_charge*1000000000)
+#m.Obj((SOC1-SOC1_init)**2)
+#m.Obj((SOC2-SOC2_init)**2)
 #m.fix(SOC2,5,1.0) # Charge Tesla by morning
 #m.fix(SOC1,23,SOC1_init)
 #m.fix(SOC2,23,SOC2_init)
@@ -199,7 +215,7 @@ m.options.NODES = 3
 m.options.MV_TYPE = 0
 
 # Solve
-m.solver_options = ['max_iter 125000']
+m.solver_options = ['max_iter 1250']
 m.solve()#disp=False)
 
 
