@@ -61,6 +61,8 @@ Q2_J=Q2*3600e3 # (J) [storage capacity]
 indices = [192,216]#[0,-1]#[192,216]
 df = pd.read_csv('SolarExport2019-04-06T18_03_26.csv')
 time = df['Time (hr)'][indices[0]:indices[1]].values-df['Time (hr)'][indices[0]] # (hr)
+months = df['Month'][indices[0]:indices[1]].values # (month)
+days = df['Day'][indices[0]:indices[1]].values # (day)
 hours = df['Hour'][indices[0]:indices[1]].values # (hr)
 Temperatures = df['Temperature (K)'][indices[0]:indices[1]].values # (K)
 DirectFluxes = df['Direct Flux (W/m2)'][indices[0]:indices[1]].values # (W/m2)
@@ -68,6 +70,7 @@ ClearDirectFluxes = df['Clear Direct Flux (W/m2)'][indices[0]:indices[1]].values
 Zeniths = df['Zenith (deg from up)'][indices[0]:indices[1]].values # (degrees)
 Azimuths =df['Azimuth (deg from north cw)'][indices[0]:indices[1]].values # (degrees)
 n = len(time)
+n_days = len(np.unique(days))
 p_low = 0.0679 # ($/kWh)
 p_high = 0.2278 # ($/kWh)
 time24 = np.linspace(0,23,24)
@@ -93,12 +96,8 @@ for i in range(n):
 m = GEKKO()
 m.time = time
 m.hours = hours
-#nm = len(time)*2 # 30 minute intervals
-#m.time = np.linspace(time[0],time[-1],nm)
-#m.hours = interp1d(time,hours)(m.time)
 
 # Parameters
-########################################################################
 Tsol_l = m.Param(value=Temperatures) # (K) [solar cell temperature - left side]
 Tsol_r = m.Param(value=Temperatures) # (K) [solar cell temperature - right side]
 Gsol_l = m.Param(value=LocalFluxL) # (W/m2) [orientation corrected solar irradiation - left side]
@@ -107,23 +106,12 @@ Pdemand = m.Param(value=demand*(np.random.randn(n)/80+1.0)) # (W) [electricity d
 # [random deviation from normal distriubtion with mean 1.0 and std dev 0.0125]
 price = m.Param(value=prices) # ($/J) [electricity price]
 B2_home = m.Param(value=B2_home_values) # (0 or 1) [determines whether Tesla ModelS battery is at home]
-########################################################################
-#Tsol_l = m.Param(value=interp1d(time,Temperatures)(m.time)) # (K) [solar cell temperature - left side]
-#Tsol_r = m.Param(value=interp1d(time,Temperatures)(m.time)) # (K) [solar cell temperature - right side]
-#Gsol_l = m.Param(value=interp1d(time,LocalFluxL)(m.time)) # (W/m2) [orientation corrected solar irradiation - left side]
-#Gsol_r = m.Param(value=interp1d(time,LocalFluxR)(m.time)) # (W/m2) [orientation corrected solar irradiation - right side]
-#Pdemand = m.Param(value=interp1d(time,demand)(m.time)) # (W) [electricity demand of the house]
-## adjust each day with random noise?
-#price = m.Param(value=interp1d(time,prices)(m.time)) # ($/J) [electricity price]
-########################################################################
 
 # Manipulated Variables
 # May need to specify Nm_s so voltage is specified
-# Need to place limit on number of panels (within roo area, voltage limits)
+# Need to place limit on number of panels (within roof area, voltage limits)
 # May need to do economic analysis of solar panels separately due to integer solver being slow
 # Should we also manipulate the number of Powerwall batteries?
-# Need to model use of Tesla during the day (unavailable, SOC drops)
-    # Given duty with random variation for Tesla each day? Random deviations from departure and arrival times?
 Nm_s_l = m.FV(value=7,lb=1,integer=True) # [number of solar modules in series - left side]
 Nm_s_r = m.FV(value=7,lb=1,integer=True) # [number of solar modules in series - right side]
 Nm_p_l = m.FV(value=5,lb=1,integer=True) # [number of solar modules in parallel - left side]
@@ -140,6 +128,7 @@ B_discharge2.STATUS = 1
 
 # Intermediates
 # Is it possible to reject Psol when Vsol is too low? Maybe make inverter efficiency = f(V)?
+    # Doesn't look necessary (see voltage plot)
 # Battery efficiency is not implemented
 Psol_l = m.Intermediate(aP*(bP**Tsol_l)*(Gsol_l**cP)*Nm_p_l*Nm_s_l) # [solar array power - left side]
 Psol_r = m.Intermediate(aP*(bP**Tsol_r)*(Gsol_r**cP)*Nm_p_r*Nm_s_r) # [solar array power - right side]
@@ -166,29 +155,58 @@ m.Equation(B_charge2*B_discharge2 == 0) # Only one of the two variables can be n
 m.Equation(cost.dt() == cost_rate)
 
 # Objectives
+## multiple objectives are summed
+## Max profit / Min bill
 p = np.zeros(n)
-#p = np.zeros(nm)
 p[-1] = 1.0
 final = m.Param(value=p)
-m.Obj(cost*final) # Max profit / Min bill
-# if multiple objectives are provided, they are summed
-q = np.zeros(n)
-#q = np.zeros(nm)
-q[np.where(m.hours==6)] = 1.0
-morning_charge = m.Param(value=q)
-#m.Obj(-SOC2*morning_charge*1e4) # Charge Tesla by morning
-#m.Obj((SOC2-(1.0-1.5e-3))**2*morning_charge*1e12) # Charge Tesla by morning
+m.Obj(cost*final*100)
+
+## Charge Tesla by 6 AM Each morning
+#q = np.zeros(n)
+#q[np.where(m.hours==6)] = 1.0
+#morning_charge = m.Param(value=q)
+#m.Obj(-SOC2*morning_charge*1e4)
+#m.Obj((SOC2-(1.0-1.5e-3))**2*morning_charge*1e12)
+m.fix(SOC2,6,1.0)
+# We could also try SOC2 set points
+
+## Tesla returns in afternoon/evening having been used
 r = np.zeros(n)
-#r = np.zeros(nm)
 r[np.where(m.hours==16)] = 1.0
-evening_charge = m.Param(value=r)
-m.Obj((SOC2-0.4)**2*evening_charge*8e4)
-m.fix(SOC2,6,1.0)#-1.5e-4)
-#m.fix(SOC2,16,0.4)
-#m.Obj((SOC2-np.random.randn(1)[0]/20+0.4)**2*evening_charge*100000000)
-# [differs each day due to random deviation from normal distriubtion with mean 0.4 and std dev 0.05]
-#(SOC2.value[16]-0.4)**2*1e5
-#-SOC2.value[6]*1e4
+evening_soc_short = np.ones(n_days)*0.4
+
+#### Confirmation of randn behavior with selecting integers between 13 and 21
+#hrs = np.linspace(12,22,11,dtype=int)
+#rands = np.zeros(11)
+#for i in range(10000):
+#    rand = int(np.random.randn(n_days)[0] + 17.5)
+#    rands[np.where(hrs == rand)] += 1
+#plt.figure()
+#plt.plot(hrs,rands,'o')
+
+#### Random return hour each day
+#return_hrs = (np.random.randn(n_days) + 17.5).astype(int)
+#return_hrs = return_hrs + 24*np.linspace(0,n_days-1,n_days)
+#for i in range(n_days):
+#    r[np.where(time==return_hrs[i])] = 1.0
+## [differs each day due to random deviation from normal distriubtion with mean 0.4 and std dev 0.05]
+
+evening_time = m.Param(value=r)
+
+### Random return charge each day
+#evening_soc_short = np.random.randn(n_days)/20+0.4
+evening_soc = m.Param(value=np.ones(n)*evening_soc_short[0])
+j = 0
+for i in range(1,n):
+    if days[i] != days[i-1]:
+        j += 1
+    evening_soc.value[i] = evening_soc_short[j]
+
+#m.Obj((SOC2-0.4)**2*evening_time*6e4)
+m.Obj((SOC2-evening_soc)**2*evening_time*5e4)
+
+# We could also try SOC2 set points
 
 # Options
 m.options.IMODE = 6
@@ -202,7 +220,8 @@ m.solve()#disp=False)
 
 #%%
 plt.close('all')
-hr_gap = 3
+if n_days == 1:
+    hr_gap = 3
 xtix = np.arange(int(m.time[0]),int(m.time[-1]+1),hr_gap)
 xtixnames = []
 xtixblank = []
