@@ -96,11 +96,12 @@ class Parameter:
             self.I_pv = I_pv                   # (A) [Initial guess for current of cells in series]
 
 
-#HIT = Parameter(Area_Desired=1500*.092903,Voltage_Desired=557.6,Print=True)
-#print (HIT.N_s)
-#print (HIT.N_p)
+#HIT = Parameter(Area_Desired=750*.092903,Voltage_Desired=500,Print=True)
+#print (HIT.Nm_s)
+#print (HIT.Nm_p)
 #print (HIT.SolarPanelArea)
 #print (HIT.SolarCellArea)
+#print (HIT.SolarVoltageOpenCircuit)
 
 def I_Single_String(parameters,PrintF=False,ReturnNegative=False):
     '''
@@ -298,14 +299,20 @@ def OrientationCorrection(DirectFlux,Azimuth,Zenith,RoofDirection,RoofPitch=26.6
         return LocalFluxL,LocalFluxR,mu_l,mu_r
 
 def PrintTime(Hour,minute=True,second=False):
+    '''
+    Hour - (hours; float) [time in hours, must be 0 <= Hour < 24]
+    '''
+    if Hour < 0 or Hour >= 24:
+        print ('PrintTime error!')
+        return
     if 12 <= Hour < 24:
         am_pm = 'PM'
     else:
         am_pm = 'AM'
-    if 13 <= Hour < 25:
+    if 13 <= Hour:
         Hour -= 12
-    elif 25 <= Hour:
-        Hour -= 24
+    if Hour < 1:
+        Hour += 12
     if second == False:
         if minute == False:
             statement = str("%d" % int(Hour)) + ' ' + am_pm
