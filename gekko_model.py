@@ -92,133 +92,163 @@ LocalFluxR = np.empty(n)
 for i in range(n):
     LocalFluxL[i],LocalFluxR[i],null1,null2 = OrientationCorrection(DirectFluxes[i],Azimuths[i],Zeniths[i],
                                                         RoofDirection,RoofPitch,ViewPlot=False)
+
+#%% Run solar model for comparison
+HIT_l = Parameter(Area_Desired=750*.092903,Voltage_Desired=500,Print=True)
+HIT_r = Parameter(Area_Desired=750*.092903,Voltage_Desired=500,Print=True)
+Ps = np.empty((n,2)) # (W) [left, right solar power]
+Vs = np.empty((n,2)) # (V) [left, right solar voltage]
+etas = np.empty((n,2)) # [left, right solar efficiency]
+for i in range(n):
+    HIT_l.T = Temperatures[i]
+    HIT_r.T = Temperatures[i]
+    HIT_l.G = LocalFluxL[i]
+    HIT_r.G = LocalFluxR[i]
+    resultsL = SolarPowerMPP([HIT_l])
+    resultsR = SolarPowerMPP([HIT_r])
+    Ps[i,0] = resultsL[0]
+    Vs[i,0] = resultsL[2]
+    etas[i,0] = resultsL[3]
+    Ps[i,1] = resultsR[0]
+    Vs[i,1] = resultsR[2]
+    etas[i,1] = resultsR[3]
+
 #%% Build Model
-m = GEKKO()
-m.time = time
-m.hours = hours
+weights = [5e4] #np.linspace(4,100,196)*1e4
+for w in weights:
+    print ('Weight:',w)
+    try:
+        m = GEKKO()
+        m.time = time
+        m.hours = hours
 
-# Parameters
-Tsol_l = m.Param(value=Temperatures) # (K) [solar cell temperature - left side]
-Tsol_r = m.Param(value=Temperatures) # (K) [solar cell temperature - right side]
-Gsol_l = m.Param(value=LocalFluxL) # (W/m2) [orientation corrected solar irradiation - left side]
-Gsol_r = m.Param(value=LocalFluxR) # (W/m2) [orientation corrected solar irradiation - right side]
-Pdemand = m.Param(value=demand*(np.random.randn(n)/80+1.0)) # (W) [electricity demand of the house]
-# [random deviation from normal distriubtion with mean 1.0 and std dev 0.0125]
-price = m.Param(value=prices) # ($/J) [electricity price]
-B2_home = m.Param(value=B2_home_values) # (0 or 1) [determines whether Tesla ModelS battery is at home]
+        # Parameters
+        Tsol_l = m.Param(value=Temperatures) # (K) [solar cell temperature - left side]
+        Tsol_r = m.Param(value=Temperatures) # (K) [solar cell temperature - right side]
+        Gsol_l = m.Param(value=LocalFluxL) # (W/m2) [orientation corrected solar irradiation - left side]
+        Gsol_r = m.Param(value=LocalFluxR) # (W/m2) [orientation corrected solar irradiation - right side]
+        Pdemand = m.Param(value=demand) # (W) [electricity demand of the house]
+        #Pdemand = m.Param(value=demand*(np.random.randn(n)/80+1.0)) # (W) [electricity demand of the house]
+        # [random deviation from normal distriubtion with mean 1.0 and std dev 0.0125]
+        price = m.Param(value=prices) # ($/J) [electricity price]
+        B2_home = m.Param(value=B2_home_values) # (0 or 1) [determines whether Tesla ModelS battery is at home]
+        Nm_s_l = m.Param(value=7) # [number of solar modules in series - left side]
+        Nm_s_r = m.Param(value=7) # [number of solar modules in series - right side]
+        Nm_p_l = m.Param(value=5) # [number of solar modules in parallel - left side]
+        Nm_p_r = m.Param(value=5) # [number of solar modules in parallel - right side]
+        NN_PW = m.Param(value=1)  # [number of powerwall batteries - not profitable to do more than 1]
+        # Need to do economic analysis of solar panels
 
-# Manipulated Variables
-# May need to specify Nm_s so voltage is specified
-# Need to place limit on number of panels (within roof area, voltage limits)
-# May need to do economic analysis of solar panels separately due to integer solver being slow
-# Should we also manipulate the number of Powerwall batteries?
-Nm_s_l = m.FV(value=7,lb=1,integer=True) # [number of solar modules in series - left side]
-Nm_s_r = m.FV(value=7,lb=1,integer=True) # [number of solar modules in series - right side]
-Nm_p_l = m.FV(value=5,lb=1,integer=True) # [number of solar modules in parallel - left side]
-Nm_p_r = m.FV(value=5,lb=1,integer=True) # [number of solar modules in parallel - right side]
-NN_PW = m.FV(value=1,lb=1,integer=True)  # [number of powerwall batteries]
-B_charge1 = m.MV(value=0,lb=0,ub=C1*NN_PW) # (W) [rate of charge of Powerwall batteries]
-B_charge2 = m.MV(value=0,lb=0,ub=C2) # (W) [rate of charge of Tesla ModelS battery]
-B_discharge1 = m.MV(value=0,lb=0,ub=D1*NN_PW) # (W) [rate of discharge of Powerwall batteries]
-B_discharge2 = m.MV(value=0,lb=0,ub=D2) # (W) [rate of discharge of Tesla ModelS battery]
-B_charge1.STATUS = 1
-B_charge2.STATUS = 1
-B_discharge1.STATUS = 1
-B_discharge2.STATUS = 1
+        # Manipulated Variables
+        B_charge1 = m.MV(value=0,lb=0,ub=C1*NN_PW) # (W) [rate of charge of Powerwall batteries]
+        B_charge2 = m.MV(value=0,lb=0,ub=C2) # (W) [rate of charge of Tesla ModelS battery]
+        B_discharge1 = m.MV(value=0,lb=0,ub=D1*NN_PW) # (W) [rate of discharge of Powerwall batteries]
+        B_discharge2 = m.MV(value=0,lb=0,ub=D2) # (W) [rate of discharge of Tesla ModelS battery]
+        B_charge1.STATUS = 1
+        B_charge2.STATUS = 1
+        B_discharge1.STATUS = 1
+        B_discharge2.STATUS = 1
 
-# Intermediates
-# Is it possible to reject Psol when Vsol is too low? Maybe make inverter efficiency = f(V)?
-    # Doesn't look necessary (see voltage plot)
-# Battery efficiency is not implemented
-Psol_l = m.Intermediate(aP*(bP**Tsol_l)*(Gsol_l**cP)*Nm_p_l*Nm_s_l) # [solar array power - left side]
-Psol_r = m.Intermediate(aP*(bP**Tsol_r)*(Gsol_r**cP)*Nm_p_r*Nm_s_r) # [solar array power - right side]
-Vsol_l = m.Intermediate(aV*(bV**Tsol_l)*(Gsol_l**cV)*Nm_s_l) # (V) [solar array voltage - left side]
-Vsol_r = m.Intermediate(aV*(bV**Tsol_r)*(Gsol_r**cV)*Nm_s_r) # (V) [solar array voltage - right side]
-Psol_tot = m.Intermediate((Psol_l + Psol_r)*inverter_eff) # (W) [Power from solar array]
-Q1_J = m.Intermediate(Q1*NN_PW*3600.0e3) # (J) [storage capacity]
-Pbatt = m.Intermediate(B_discharge1-B_charge1+(B_discharge2-B_charge2)*B2_home) # (W) [Net power flow from(+)/to(-) the batteries]
-Pgrid = m.Intermediate(Pdemand-Psol_tot-Pbatt) # (W) [Power bought(+)/sold(-) to the grid]
-cost_rate = m.Intermediate(price*Pgrid*3600) # ($/hr) [cost(+)/revenue(-) from buying/selling electricity from/to the grid]
+        # Intermediates
+        # Is it possible to reject Psol when Vsol is too low? Maybe make inverter efficiency = f(V)?
+        # Doesn't look necessary (see voltage plot)
+        # Battery efficiency is not implemented
+        Psol_l = m.Intermediate(aP*(bP**Tsol_l)*(Gsol_l**cP)*Nm_p_l*Nm_s_l) # (W) [solar array power - left side]
+        Psol_r = m.Intermediate(aP*(bP**Tsol_r)*(Gsol_r**cP)*Nm_p_r*Nm_s_r) # (W) [solar array power - right side]
+        Vsol_l = m.Intermediate(aV*(bV**Tsol_l)*(Gsol_l**cV)*Nm_s_l) # (V) [solar array voltage - left side]
+        Vsol_r = m.Intermediate(aV*(bV**Tsol_r)*(Gsol_r**cV)*Nm_s_r) # (V) [solar array voltage - right side]
+        Psol_tot = m.Intermediate((Psol_l + Psol_r)*inverter_eff) # (W) [Power from solar array]
+        Q1_J = m.Intermediate(Q1*NN_PW*3600.0e3) # (J) [storage capacity]
+        Pbatt = m.Intermediate(B_discharge1-B_charge1+(B_discharge2-B_charge2)*B2_home) # (W) [Net power flow from(+)/to(-) the batteries]
+        Pgrid = m.Intermediate(Pdemand-Psol_tot-Pbatt) # (W) [Power bought(+)/sold(-) to the grid]
+        cost_rate = m.Intermediate(price*Pgrid*3600) # ($/hr) [cost(+)/revenue(-) from buying/selling electricity from/to the grid]
 
-# State variables
-SOC1_init = 1e-3
-SOC2_init = 1e-3
-SOC1 = m.SV(value=SOC1_init,lb=0,ub=1) # [state of charge of Powerwall batteries]
-SOC2 = m.SV(value=SOC2_init,lb=0,ub=1) # [state of charge of Tesla ModelS battery]
-cost = m.SV(value=0.00) # ($) [total spent(+)/earned(-) from buying/selling electricity from/to the grid at given time point]
+        # State variables
+        SOC1_init = 1e-3
+        SOC2_init = 1e-3
+        SOC1 = m.SV(value=SOC1_init,lb=0,ub=1) # [state of charge of Powerwall batteries]
+        SOC2 = m.SV(value=SOC2_init,lb=0,ub=1) # [state of charge of Tesla ModelS battery]
+        cost = m.SV(value=0.00) # ($) [total spent(+)/earned(-) from buying/selling electricity from/to the grid at given time point]
 
-# Equations
-m.Equation(SOC1.dt() == (B_charge1*batt_eff-B_discharge1*(2-batt_eff))*3600/Q1_J)
-m.Equation(SOC2.dt() == (B_charge2*batt_eff*B2_home-B_discharge2*(2-batt_eff))*3600/Q2_J)
-m.Equation(B_charge1*B_discharge1 == 0) # Only one of the two variables can be nonzero
-m.Equation(B_charge2*B_discharge2 == 0) # Only one of the two variables can be nonzero
-m.Equation(cost.dt() == cost_rate)
+        # Equations
+        m.Equation(SOC1.dt() == (B_charge1*batt_eff-B_discharge1*(2-batt_eff))*3600/Q1_J)
+        m.Equation(SOC2.dt() == (B_charge2*batt_eff*B2_home-B_discharge2*(2-batt_eff))*3600/Q2_J)
+        m.Equation(B_charge1*B_discharge1 == 0) # Only one of the two variables can be nonzero
+        m.Equation(B_charge2*B_discharge2 == 0) # Only one of the two variables can be nonzero
+        m.Equation(cost.dt() == cost_rate)
 
-# Objectives
-## multiple objectives are summed
-## Max profit / Min bill
-p = np.zeros(n)
-p[-1] = 1.0
-final = m.Param(value=p)
-m.Obj(cost*final*100)
+        # Objectives
+        ## multiple objectives are summed
+        ## Max profit / Min bill
+        p = np.zeros(n)
+        p[-1] = 1.0
+        final = m.Param(value=p)
+        m.Obj(cost*final*100)
 
-## Charge Tesla by 6 AM Each morning
-#q = np.zeros(n)
-#q[np.where(m.hours==6)] = 1.0
-#morning_charge = m.Param(value=q)
-#m.Obj(-SOC2*morning_charge*1e4)
-#m.Obj((SOC2-(1.0-1.5e-3))**2*morning_charge*1e12)
-m.fix(SOC2,6,1.0)
-# We could also try SOC2 set points
+        ## Charge Tesla by 6 AM Each morning
+        #q = np.zeros(n)
+        #q[np.where(m.hours==6)] = 1.0
+        #morning_charge = m.Param(value=q)
+        #m.Obj(-SOC2*morning_charge*1e4)
+        #m.Obj((SOC2-(1.0-1.5e-3))**2*morning_charge*1e12)
+        m.fix(SOC2,6,1.0)
+        # We could also try SOC2 set points
 
-## Tesla returns in afternoon/evening having been used
-r = np.zeros(n)
-r[np.where(m.hours==16)] = 1.0
-evening_soc_short = np.ones(n_days)*0.4
+        ## Tesla returns in afternoon/evening having been used
+        r = np.zeros(n)
+        r[np.where(m.hours==16)] = 1.0
 
-#### Confirmation of randn behavior with selecting integers between 13 and 21
-#hrs = np.linspace(12,22,11,dtype=int)
-#rands = np.zeros(11)
-#for i in range(10000):
-#    rand = int(np.random.randn(n_days)[0] + 17.5)
-#    rands[np.where(hrs == rand)] += 1
-#plt.figure()
-#plt.plot(hrs,rands,'o')
+        #### Confirmation of randn behavior with selecting integers between 13 and 21
+        #hrs = np.linspace(12,22,11,dtype=int)
+        #rands = np.zeros(11)
+        #for i in range(10000):
+        #    rand = int(np.random.randn(n_days)[0] + 17.5)
+        #    rands[np.where(hrs == rand)] += 1
+        #plt.figure()
+        #plt.plot(hrs,rands,'o')
 
-#### Random return hour each day
-#return_hrs = (np.random.randn(n_days) + 17.5).astype(int)
-#return_hrs = return_hrs + 24*np.linspace(0,n_days-1,n_days)
-#for i in range(n_days):
-#    r[np.where(time==return_hrs[i])] = 1.0
-## [differs each day due to random deviation from normal distriubtion with mean 0.4 and std dev 0.05]
+        #### Random return hour each day
+        #return_hrs = (np.random.randn(n_days) + 17.5).astype(int)
+        #return_hrs = return_hrs + 24*np.linspace(0,n_days-1,n_days)
+        #for i in range(n_days):
+        #    r[np.where(time==return_hrs[i])] = 1.0
+        ## [differs each day due to random deviation from normal distriubtion with mean 0.4 and std dev 0.05]
 
-evening_time = m.Param(value=r)
+        evening_time = m.Param(value=r)
 
-### Random return charge each day
-#evening_soc_short = np.random.randn(n_days)/20+0.4
-evening_soc = m.Param(value=np.ones(n)*evening_soc_short[0])
-j = 0
-for i in range(1,n):
-    if days[i] != days[i-1]:
-        j += 1
-    evening_soc.value[i] = evening_soc_short[j]
+        ### Random return charge each day
+        evening_soc_short = np.ones(n_days)*0.4
+        #evening_soc_short = np.random.randn(n_days)/20+0.4
+        evening_soc = m.Param(value=np.ones(n)*evening_soc_short[0])
+        j = 0
+        for i in range(1,n):
+            if days[i] != days[i-1]:
+                j += 1
+        evening_soc.value[i] = evening_soc_short[j]
 
-#m.Obj((SOC2-0.4)**2*evening_time*6e4)
-m.Obj((SOC2-evening_soc)**2*evening_time*5e4)
+        #m.Obj((SOC2-0.4)**2*evening_time*6e4)
+        m.Obj((SOC2-evening_soc)**2*evening_time*w)#*30e4)
 
-# We could also try SOC2 set points
+        # We could also try SOC2 set points
 
-# Options
-m.options.IMODE = 6
-m.options.SOLVER = 3
-m.options.NODES = 4
-m.options.MV_TYPE = 0
+        # Options
+        m.options.IMODE = 6
+        m.options.SOLVER = 3
+        m.options.NODES = 4
+        m.options.MV_TYPE = 0
 
-# Solve
-m.solver_options = ['max_iter 1250']
-m.solve()#disp=False)
+        # Solve
+        m.solver_options = ['max_iter 1250']
+        if len(weights) == 1:
+            m.solve()
+        else:
+            m.solve(disp=False)
 
-#%%
+        break
+    except:
+        print ('\tfailed')
+
+#%% Plots
 plt.close('all')
 if n_days == 1:
     hr_gap = 3
@@ -230,32 +260,50 @@ for i in range(0,len(xtix)):
     xtixblank.append('')
 #plt.xticks(xtix,xtixblank)
 
-#plt.figure(figsize=(10,8))
-## T
-## G
-#plt.subplot(3,1,1)
-#plt.plot(m.time,np.array(Vsol_l.value),'o-',label='Left')
-#plt.plot(m.time,np.array(Vsol_r.value),'s--',label='Right')
-#plt.ylabel('Solar Voltage (V)')
-#plt.legend()
-#plt.grid()
-#plt.xlim([m.time[0],m.time[-1]])
-#plt.xticks(xtix,xtixnames)
-## P
+# Electricity price/demand plots
+
+
+plt.figure(figsize=(10,4))
+plt.plot(m.time,demand*1e-3,color='darkorange')
+plt.ylabel('Electricity Demand (kW)')
+plt.grid()
+plt.xlim([m.time[0],m.time[-1]])
+plt.xticks(xtix,xtixnames)
+
+plt.figure(figsize=(10,4))
+plt.plot(m.time,prices*3600e3*100,color='darkorange')
+plt.ylabel('Electricity Price ($\cent$/kWh)')
+plt.grid()
+plt.xlim([m.time[0],m.time[-1]])
+plt.xticks(xtix,xtixnames)
+
+# Compare to detailed solar model
+plt.figure(figsize=(10,16/3))
+plt.subplot(2,1,1)
+plt.plot(m.time,np.array(Vsol_l.value),'-',label='Left Twin')
+plt.plot(m.time,np.array(Vsol_r.value),'--',label='Right Twin')
+plt.plot(m.time,Vs[:,0],'C0o',label='Left')
+plt.plot(m.time,Vs[:,1],'C1s',label='Right')
+plt.ylabel('Solar Voltage (V)')
+plt.legend()
+plt.grid()
+plt.xlim([m.time[0],m.time[-1]])
+plt.xticks(xtix,xtixblank)
+plt.subplot(2,1,2)
+plt.plot(m.time,np.array(Psol_l.value)/1e3,'-',label='Left Twin')
+plt.plot(m.time,np.array(Psol_r.value)/1e3,'--',label='Right Twin')
+plt.plot(m.time,Ps[:,0]/1e3,'C0o',label='Left')
+plt.plot(m.time,Ps[:,1]/1e3,'C1s',label='Right')
+plt.ylabel('Solar Power (kW)')
+plt.legend()
+plt.grid()
+plt.xlim([m.time[0],m.time[-1]])
+plt.xticks(xtix,xtixnames)
 
 plt.figure(figsize=(10,8))
 plt.subplot(3,1,1)
 plt.plot(m.time,np.array(price.value)*3600e3)
 plt.ylabel('Price ($/kWh)')
-plt.grid()
-plt.xlim([m.time[0],m.time[-1]])
-plt.xticks(xtix,xtixblank)
-
-plt.subplot(3,1,2)
-plt.plot(m.time[:-1],(np.array(B_charge1.value)[:-1]-np.array(B_discharge1.value)[:-1])*1e-3,'-',label='Powerwall')
-plt.plot(m.time[:-1],(np.array(B_charge2.value)[:-1]*B2_home.value[:-1]-np.array(B_discharge2.value)[:-1])*1e-3,'--',label='ModelS')
-plt.ylabel('Battery Rate (kW)')
-plt.legend()
 plt.grid()
 plt.xlim([m.time[0],m.time[-1]])
 plt.xticks(xtix,xtixblank)
@@ -267,6 +315,22 @@ for i in range(1,len(B2_home_indices)):
         B2_home_indices1 = np.concatenate([B2_home_indices1,[int(m.time[B2_home_indices[i-1]+1])]])
         B2_home_indices2 = B2_home_indices[i:]
         break
+
+plt.subplot(3,1,2)
+plt.plot(m.time[:-1],(np.array(B_charge1.value)[:-1]-np.array(B_discharge1.value)[:-1])*1e-3,'-',label='Powerwall')
+plt.plot(m.time[B2_home_indices1],(np.array(B_charge2.value)[B2_home_indices1]*B2_home.value[B2_home_indices1] \
+         -np.array(B_discharge2.value)[B2_home_indices1])*1e-3,'C1--',label='ModelS')
+plt.plot(m.time[B2_home_indices1[-1]],(np.array(B_charge2.value)[B2_home_indices1[-1]]*B2_home.value[B2_home_indices1[-1]] \
+         -np.array(B_discharge2.value)[B2_home_indices1[-1]])*1e-3,'C1o')
+plt.plot(m.time[B2_home_indices2[0]],(np.array(B_charge2.value)[B2_home_indices2[0]]*B2_home.value[B2_home_indices2[0]] \
+         -np.array(B_discharge2.value)[B2_home_indices2[0]])*1e-3,'C1o')
+plt.plot(m.time[B2_home_indices2[:-1]],(np.array(B_charge2.value)[B2_home_indices2[:-1]]*B2_home.value[B2_home_indices2[:-1]] \
+         -np.array(B_discharge2.value)[B2_home_indices2[:-1]])*1e-3,'C1--')
+plt.ylabel('Battery Rate (kW)')
+plt.legend()
+plt.grid()
+plt.xlim([m.time[0],m.time[-1]])
+plt.xticks(xtix,xtixblank)
 
 plt.subplot(3,1,3)
 plt.plot(m.time,np.array(SOC1.value)*100,'-',label='Powerwall')
@@ -301,6 +365,9 @@ plt.xticks(xtix,xtixblank)
 
 plt.subplot(3,1,3)
 plt.plot(m.time,np.array(cost.value))
+if cost.value[-1] < 0:
+    plt.text(0.98,0.5,'Day\'s Revenue: $%.2f' % (-cost.value[-1]),horizontalalignment='right', \
+             transform=plt.gca().transAxes,bbox=dict(facecolor='darkorange', alpha=0.8))
 plt.ylabel('Cost ($)')
 plt.grid()
 plt.xlim([m.time[0],m.time[-1]])
